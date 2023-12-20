@@ -1,74 +1,61 @@
-import axios from 'axios';
-import './App.css';
-import React, { useState, useEffect } from 'react';
-import logo from './default_image.png';
-import html2canvas from 'html2canvas';
-import jsPDF from 'jspdf';
+import React, {useState,useEffect} from 'react';
+import * as XLSX from 'xlsx';
+import logo from './logo.jpg';
+import './App.css'
 
-function App() {
-  const [data, setData] = useState([]);
-  const [filteredData, setFilteredData] = useState([]);
-  const [memberCode, setMemberCode] = useState('');
-  const [memberInfo, setMemberInfo] = useState({
-    memberCode: '',
-    memberName: '',
-    totalLiter: 0,
-    averageRate: 0,
-    totalAmount: 0,
-  });
+const ExcelReader = () => {
+  const [excelData, setExcelData] = useState([]);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [showInput, setShowInput] = useState(true); // State to manage input field visibility
+
+
+  const handleFile = (e) => {
+    const file = e.target.files[0];
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const binaryString = event.target.result;
+      const workbook = XLSX.read(binaryString, { type: 'binary', cellDates: true });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json(sheet, { raw: false });
+      setExcelData(data);
+      const firstRecord = data[0];
+      const lastRecord = data[data.length - 1];
+      setFromDate(formatDate(firstRecord.DATE));
+      setToDate(formatDate(lastRecord.DATE));
+    };
+    reader.readAsBinaryString(file);
+    setShowInput(false);
+  };
 
   useEffect(() => {
-    axios.get('http://localhost:3030/users')
-      .then(res => {
-        setData(res.data);
-        setFilteredData(res.data);
-        setTableDates(res.data);
-      })
-      .catch(err => console.error('Error fetching data:', err));
-  }, []);
+    // console.log('Excel Data:', excelData);
+  }, [excelData]);
 
-  const setTableDates = (tableData) => {
-    if (tableData.length > 0) {
-      // Find the earliest and latest dates in the table
-      const dates = tableData.map(user => user.DATE);
-      const sortedDates = dates.sort((a, b) => new Date(a) - new Date(b));
 
-      setFromDate(sortedDates[0]); // Set the earliest date as 'From' date
-      setToDate(sortedDates[sortedDates.length - 1]); // Set the latest date as 'To' date
+  const formatDate = (dateString) => {
+    const parts = dateString.split(/[-/]/);
+    if (parts.length !== 3) {
+      return '';
     }
+
+    const day = parts[0].padStart(2, '0');
+    const month = parts[1].padStart(2, '0');
+    const year = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
+
+    return `${day}-${month}-${year}`;
   };
 
-  const handleMember = () => {
-    const memberData = data.filter(user => user.CODE === Number(memberCode));
-    setFilteredData(memberData);
-
-    const liters = memberData.reduce((total, user) => total + user.QTY, 0);
-    const rates = memberData.map(user => user.RATE);
-    const averageRate = rates.length > 0 ? rates.reduce((a, b) => a + b) / rates.length : 0;
-
-    // Get unique member codes and names
-    const uniqueMemberCodes = [...new Set(memberData.map(user => user.CODE))];
-    const uniqueMemberNames = [...new Set(memberData.map(user => user.NAME))];
-    const totalAmount = memberData.reduce((total, user) => total + user.AMOUNT, 0);
-
-
-    setMemberInfo({
-      memberCode: uniqueMemberCodes.join(', '),
-      memberName: uniqueMemberNames.join(', '),
-      totalLiter: liters.toFixed(2),
-      averageRate: averageRate.toFixed(2),
-      totalAmount: totalAmount.toFixed(2),
-
-    });
-  };
-
-  const rearrangeData = () => {
+  const rearrangeData = (memberData) => {
     const rearrangedData = {};
 
-    filteredData.forEach(item => {
+    memberData.forEach(item => {
       const { DATE, SHIFT, QTY, RATE, AMOUNT } = item;
+
+      const parsedQty = parseFloat(QTY);
+      const parsedRate = parseFloat(RATE);
+      const parsedAmount = parseFloat(AMOUNT);
 
       if (!rearrangedData[DATE]) {
         rearrangedData[DATE] = {
@@ -78,161 +65,160 @@ function App() {
       }
 
       if (SHIFT === 'M') {
-        rearrangedData[DATE].Morning.QTY += QTY;
-        rearrangedData[DATE].Morning.RATE += RATE;
-        rearrangedData[DATE].Morning.AMOUNT += AMOUNT;
+        rearrangedData[DATE].Morning.QTY += parsedQty;
+        rearrangedData[DATE].Morning.RATE += parsedRate;
+        rearrangedData[DATE].Morning.AMOUNT += parsedAmount;
       } else if (SHIFT === 'E') {
-        rearrangedData[DATE].Evening.QTY += QTY;
-        rearrangedData[DATE].Evening.RATE += RATE;
-        rearrangedData[DATE].Evening.AMOUNT += AMOUNT;
+        rearrangedData[DATE].Evening.QTY += parsedQty;
+        rearrangedData[DATE].Evening.RATE += parsedRate;
+        rearrangedData[DATE].Evening.AMOUNT += parsedAmount;
       }
     });
 
     return rearrangedData;
   };
 
-  const rearrangedData = rearrangeData();
 
-  const handleGeneratePDF = () => {
-    const input = document.getElementById('pdf-content'); // Change 'pdf-content' to the ID of your table
-    if (!input) {
-      console.error('Element not found');
-      return;
-    }
-
-    html2canvas(input).then(canvas => {
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF();
-      const imgWidth = 208;
-      const pageHeight = 295;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      let heightLeft = imgHeight;
-      let position = 0;
-
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-
-      while (heightLeft >= 0) {
-        position = heightLeft - imgHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
+  const separateRecordsByMemberCode = (data) => {
+    const separatedData = data.reduce((result, item) => {
+      const { CODE } = item;
+      if (!result[CODE]) {
+        result[CODE] = [];
       }
-      const fileName = `Report-${memberCode}-date-${fromDate}-to-${toDate}.pdf`;
+      result[CODE].push(item);
+      return result;
+    }, {});
 
-      pdf.save(fileName);
-    });
+    return separatedData;
   };
 
-  // const handlePrint = () => {
-  //   window.print();
-  // };
+  const separatedRecords = separateRecordsByMemberCode(excelData);
+  const ArrangeData = rearrangeData(excelData);
+ 
+  const generateTableForMember = (memberCode, records) => {
+    let totalLiters = 0;
+    let totalAmount = 0;
+    const ReData = rearrangeData(records);
+    console.log("RED",ReData);
+    console.log(records);
+  
+    records.forEach(record => {
+      const liters = parseFloat(record.QTY || 0);
+      const amount = parseFloat(record.AMOUNT || 0);
+  
+      totalLiters += liters;
+      totalAmount += amount;
+    });
+  
+    const tableHeaders = (
+      <thead>
+       <tr>
+                <th rowSpan="2" style={{ textAlign: 'center' }}>Date</th>
+                <th colSpan="3" style={{ textAlign: 'center' }}>Morning</th>
+                <th colSpan="3" style={{ textAlign: 'center' }}>Evening</th>
+              </tr>
+              <tr>
+                <th>Qty</th>
+                <th>Rate</th>
+                <th>Amount</th>
+                <th>Qty</th>
+                <th>Rate</th>
+                <th>Amount</th>
+              </tr>
+      </thead>
+    );
+  
+    const tableBody = (
+      <tbody>
+         {Object.keys(ReData).map(date => (
+                <tr key={date}>
+                  <td>{formatDate(date)}</td>
+                  <td>{ReData[date].Morning.QTY}</td>
+                  <td>{ReData[date].Morning.RATE}</td>
+                  <td>{ReData[date].Morning.AMOUNT}</td>
+                  <td>{ReData[date].Evening.QTY}</td>
+                  <td>{ReData[date].Evening.RATE}</td>
+                  <td>{ReData[date].Evening.AMOUNT}</td>
+                </tr>
+              ))}
+      </tbody>
+    );
+  
+    return (
+      <div key={memberCode} className="member-bill" style={{ pageBreakAfter: 'always' }}>
+        {/* <h2>Member Code: {memberCode}</h2> */}
+        <table className="company-details">
+            <tbody>
+              <tr style={{ minHeight: "100px" }}>
+                <td>
+                  <img src={logo} alt="Company Logo" height={200} width={200} />
+                </td>
+
+                <td style={{ textAlign: "center" }}>
+                  <h3 style={{ fontWeight: 'bold', fontFamily: 'Times New Roman, serif', fontSize: '26px' }}>SBM Dairy</h3>
+                  <p>Near Ration Shop, C.pudur, Sithalangudi Post, Vadipatti Taluk, Madurai - 625 221</p>
+
+                  <p> Phone : 6379480812</p>
+                  <p><strong>Bill period From {formatDate(fromDate)} To {formatDate(toDate)}</strong></p>
+                </td>
+              </tr>
+            </tbody>
+        </table>
+        <table>
+            <tbody>
+              <tr>
+                <td style={{ textAlign: 'center' }}><strong>Member Code : {memberCode}</strong></td>
+                <td style={{ textAlign: 'center' }}><strong>Member Name : {records[0].NAME}</strong></td>
+              </tr>
+            </tbody>
+          </table>
+        <table className='table table-border' border="1">
+          {tableHeaders}
+          {tableBody}
+        </table>
+        <table>
+            <tbody>
+              <tr>
+                <td style={{ textAlign: 'center' }}><strong>Total Liter : {totalLiters.toFixed(2)}</strong></td>
+                <td style={{ textAlign: 'center' }}><strong>Average Rate :  {(totalAmount / totalLiters).toFixed(2)}</strong></td>
+                <td style={{ textAlign: 'center' }}><strong>Total Amount : {totalAmount.toFixed(2)}</strong></td>
+              </tr>
+            </tbody>
+          </table>
+          <br></br>
+          <div style={{ width: '100%' }}>
+            <p style={{ borderBottom: '1px solid black' }}></p>
+          </div>
+      </div>
+    );
+  };
+  
+  const memberTables = Object.entries(separatedRecords).map(([memberCode, records]) => {
+    return generateTableForMember(memberCode, records);
+  });
+
+  // Render tables for each member
+
+  const generatePDF = () => {
+    window.print();
+  };
+
 
   return (
-    <div className="App">
-      <div style={{ display: 'flex', alignItems: 'center' }}>
-        <label htmlFor="memberCode">Member Code:</label>
-        <input
-          type="text"
-          id="memberCode"
-          value={memberCode}
-          onChange={e => setMemberCode(e.target.value)}
-        />
-        <button onClick={handleMember}>Submit</button>
-        {memberInfo.memberCode && (
-           <div>
-           {/* Button to trigger PDF generation */}
-           <button onClick={handleGeneratePDF} style={{backgroundColor:"green"}}>Generate PDF</button>
-         </div>
-        )}
+    <div>
+ {showInput && ( // Show input field conditionally
+        <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFile} />
+      )}      <button className="generate-btn" onClick={generatePDF}>Generate PDF</button>
+
+      <div id="pdf-content">
+      {memberTables}
+
       </div>
 
-
-    
-
-
-      <div id="pdf-content" style={{ padding: "20px" }}>
-
-
-        <table className="company-details">
-          <tbody>
-            <tr>
-              <td>
-                <img src={logo} alt="Company Logo" height={100} width={100} />
-              </td>
-
-              <td>
-                <p>Company Name: ABC Dairy</p>
-                <p>Address: 123 Street, City, Country</p>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      
-
-
-        {memberInfo.memberCode && (
-          <div>
-            <table>
-              <tbody>
-                <tr>
-                  <td><strong>Member Code : {memberInfo.memberCode}</strong></td>
-                  <td><strong>Member Name : {memberInfo.memberName}</strong></td>
-                  <td>Bill period from {fromDate} to {toDate}</td>
-                </tr>
-              </tbody>
-            </table>
-
-            <table>
-              <thead>
-                <tr>
-                  <th rowSpan="2" style={{ textAlign: 'center' }}>Date</th>
-                  <th colSpan="3" style={{ textAlign: 'center' }}>Morning</th>
-                  <th colSpan="3" style={{ textAlign: 'center' }}>Evening</th>
-                </tr>
-                <tr>
-                  <th>Qty</th>
-                  <th>Rate</th>
-                  <th>Amount</th>
-                  <th>Qty</th>
-                  <th>Rate</th>
-                  <th>Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.keys(rearrangedData).map(date => (
-                  <tr key={date}>
-                    <td>{date}</td>
-                    <td>{rearrangedData[date].Morning.QTY}</td>
-                    <td>{rearrangedData[date].Morning.RATE}</td>
-                    <td>{rearrangedData[date].Morning.AMOUNT}</td>
-                    <td>{rearrangedData[date].Evening.QTY}</td>
-                    <td>{rearrangedData[date].Evening.RATE}</td>
-                    <td>{rearrangedData[date].Evening.AMOUNT}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <table>
-              <tbody>
-
-                <tr>
-                  <td><strong>Total Liter : {memberInfo.totalLiter}</strong></td>
-                  <td><strong>Average Rate : {memberInfo.averageRate}</strong></td>
-                  <td><strong>Total Amount : {memberInfo.totalAmount}</strong></td>
-
-                </tr>
-              </tbody>
-            </table>
-           
-          </div>
-        )}
-      </div>
-      {/* <div>
-        <button onClick={handlePrint}>Print</button>
-      </div> */}
     </div>
   );
-}
+};
 
-export default App;
+export default ExcelReader;
+
+
